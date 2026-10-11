@@ -12,6 +12,8 @@ export default defineConfig(() => {
       },
     },
     server: {
+      // Allow any host (such as s3.thm.my.id, tunnels, or custom domains)
+      allowedHosts: true as true,
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
