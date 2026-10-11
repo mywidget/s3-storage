@@ -161,33 +161,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
           </button>
         </form>
 
-        {/* Quick Demo Access Bar (Hanya tampil di mode Development, otomatis dihilangkan saat production build) */}
-        {import.meta.env.DEV && (
-          <div className="pt-2 border-t border-slate-800/80 space-y-2">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-medium">
-              Akses Cepat (Demo Kredensial - Dev Only)
-            </span>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => autofillDemo('admin', 'admin123')}
-                className="p-2 rounded-lg bg-slate-950 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition-colors text-left"
-              >
-                <div className="font-medium text-[11px] text-emerald-400">Admin Vault</div>
-                <div className="text-[10px] text-slate-500 font-mono">admin / admin123</div>
-              </button>
 
-              <button
-                type="button"
-                onClick={() => autofillDemo('ghoblin.zhu@gmail.com', 'admin123')}
-                className="p-2 rounded-lg bg-slate-950 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition-colors text-left"
-              >
-                <div className="font-medium text-[11px] text-sky-400">Akun Pengguna</div>
-                <div className="text-[10px] text-slate-500 font-mono truncate">ghoblin.zhu / admin123</div>
-              </button>
-            </div>
-          </div>
-        )}
 
         {/* Footer info */}
         <div className="flex items-center justify-between text-[11px] text-slate-500 pt-2 border-t border-slate-800/60 font-mono">

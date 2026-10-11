@@ -1537,7 +1537,8 @@ async function setupVite() {
   const distHtmlPath = path.resolve(__dirname, 'dist', 'index.html');
   const hasDist = fs.existsSync(distHtmlPath);
 
-  if (isProd && hasDist) {
+  // Jika folder dist/ ada (sudah dijalankan npm run build), utamakan serve static production
+  if (hasDist) {
     console.log('[CloudVault] Serving static production build from dist/');
     app.use(express.static(path.resolve(__dirname, 'dist')));
     app.get('*', (_req: Request, res: Response) => {
