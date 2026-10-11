@@ -1,4 +1,14 @@
-import { StorageFile, StorageHealth, StorageConfigInfo, SyncDiffItem, AuthUser, StorageUsageSummary, StorageEndpointProfile } from '../types';
+import {
+  StorageFile,
+  StorageHealth,
+  StorageConfigInfo,
+  SyncDiffItem,
+  AuthUser,
+  StorageUsageSummary,
+  StorageEndpointProfile,
+  MoveItemPayload,
+  MoveItemResponse,
+} from '../types';
 
 const TOKEN_KEY = 'cloudvault_auth_token';
 
@@ -148,6 +158,7 @@ export const api = {
     secretAccessKey?: string;
     publicUrl?: string;
     makeActive?: boolean;
+    skipVerify?: boolean;
   }): Promise<{ success: boolean; message: string; endpoint: StorageEndpointProfile }> {
     const res = await fetch('/api/endpoints/upsert', {
       method: 'POST',
@@ -155,7 +166,11 @@ export const api = {
       body: JSON.stringify(payload),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || 'Gagal menyimpan endpoint');
+    if (!res.ok) {
+      const err = new Error(data.message || data.error || 'Gagal menyimpan endpoint') as any;
+      err.canForceSave = Boolean(data.canForceSave);
+      throw err;
+    }
     return data;
   },
 
@@ -254,6 +269,22 @@ export const api = {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || data.details || 'Gagal membuat folder');
+    return data;
+  },
+
+  async deleteFolder(
+    folderPath: string
+  ): Promise<{ success: boolean; message: string; deletedObjectsCount: number; folder: string }> {
+    const res = await fetch('/api/folders', {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        ...this.getAuthHeaders(),
+      },
+      body: JSON.stringify({ folderPath }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || data.details || 'Gagal menghapus folder');
     return data;
   },
 
@@ -369,5 +400,44 @@ export const api = {
     });
     if (!res.ok) throw new Error('Gagal menganalisis diff sinkronisasi');
     return res.json();
+  },
+
+  async moveItem(payload: MoveItemPayload): Promise<MoveItemResponse> {
+    const res = await fetch('/api/storage/move', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...this.getAuthHeaders(),
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || data.details || 'Gagal memproses pemindahan');
+    }
+    return data;
+  },
+
+  async verifyTargetBucket(params: {
+    endpointId?: string;
+    endpoint?: string;
+    region?: string;
+    bucket: string;
+    accessKeyId?: string;
+    secretAccessKey?: string;
+  }): Promise<{ success: boolean; message: string; latencyMs?: number }> {
+    const res = await fetch('/api/storage/verify-target', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...this.getAuthHeaders(),
+      },
+      body: JSON.stringify(params),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Gagal memverifikasi akses ke bucket');
+    }
+    return data;
   },
 };

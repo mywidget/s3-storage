@@ -106,3 +106,44 @@ export interface StorageUsageSummary {
   folders: FolderUsageSummary[];
   scannedAt: string;
 }
+
+export interface MoveItemPayload {
+  type: 'file' | 'folder' | 'batch_files';
+  sourceKey?: string;
+  sourceKeys?: string[];
+  sourceFolder?: string;
+  sourceEndpointId?: string;
+  sourceBucket?: string;
+  targetEndpointId?: string;
+  targetBucket: string;
+  targetFolderPrefix?: string;
+  targetEndpoint?: string;
+  targetRegion?: string;
+  targetAccessKeyId?: string;
+  targetSecretAccessKey?: string;
+  operation?: 'move' | 'copy';
+}
+
+export interface MoveItemResponse {
+  success: boolean;
+  message: string;
+  movedCount: number;
+  totalBytes: number;
+  sourceBucket: string;
+  targetBucket: string;
+  sourceEndpoint: string;
+  targetEndpoint: string;
+  targetProfileId?: string;
+  targetProfileName?: string;
+  errors?: string[];
+}
+
+export interface MoveItemTarget {
+  type: 'file' | 'folder' | 'batch_files';
+  name: string;
+  sourcePath: string;
+  keys?: string[];
+  fileCount?: number;
+  totalSize?: number;
+}
+

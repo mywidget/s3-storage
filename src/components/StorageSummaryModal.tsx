@@ -11,6 +11,8 @@ import {
   Layers,
   Clock,
   Sparkles,
+  Trash2,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { StorageUsageSummary } from '../types';
 import { formatBytes, formatDate } from '../services/cryptoClient';
@@ -22,6 +24,8 @@ interface StorageSummaryModalProps {
   isLoading: boolean;
   onRefresh: () => void;
   onNavigateToFolder: (prefix: string) => void;
+  onDeleteFolder?: (prefix: string) => void;
+  onMoveFolder?: (folder: { name: string; prefix: string; fileCount: number; totalSizeBytes: number }) => void;
 }
 
 const FOLDER_COLORS = [
@@ -42,6 +46,8 @@ export const StorageSummaryModal: React.FC<StorageSummaryModalProps> = ({
   isLoading,
   onRefresh,
   onNavigateToFolder,
+  onDeleteFolder,
+  onMoveFolder,
 }) => {
   if (!isOpen) return null;
 
@@ -324,16 +330,56 @@ export const StorageSummaryModal: React.FC<StorageSummaryModalProps> = ({
                             </div>
                           </td>
                           <td className="py-3 px-4 text-right">
-                            <button
-                              onClick={() => {
-                                onNavigateToFolder(folder.prefix);
-                                onClose();
-                              }}
-                              className="px-2.5 py-1 rounded bg-slate-800 hover:bg-emerald-500 hover:text-slate-950 text-slate-300 transition-colors text-[11px] inline-flex items-center gap-1 font-semibold"
-                            >
-                              <span>Buka Folder</span>
-                              <ArrowRight className="w-3 h-3" />
-                            </button>
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => {
+                                  onNavigateToFolder(folder.prefix);
+                                  onClose();
+                                }}
+                                className="px-2.5 py-1 rounded bg-slate-800 hover:bg-emerald-500 hover:text-slate-950 text-slate-300 transition-colors text-[11px] inline-flex items-center gap-1 font-semibold"
+                              >
+                                <span>Buka Folder</span>
+                                <ArrowRight className="w-3 h-3" />
+                              </button>
+                              {onMoveFolder && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onMoveFolder({
+                                      name: folder.name,
+                                      prefix: folder.prefix,
+                                      fileCount: folder.fileCount,
+                                      totalSizeBytes: folder.totalSizeBytes,
+                                    });
+                                    onClose();
+                                  }}
+                                  className="p-1.5 rounded-lg bg-slate-950 hover:bg-sky-950/70 border border-slate-800 hover:border-sky-800 text-slate-400 hover:text-sky-400 transition-colors"
+                                  title={`Pindahkan folder ${folder.name} ke bucket atau endpoint lain`}
+                                >
+                                  <ArrowRightLeft className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {onDeleteFolder && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (
+                                      confirm(
+                                        `Hapus folder "${folder.name}" (${folder.fileCount} file, ${formatBytes(
+                                          folder.totalSizeBytes
+                                        )}) beserta seluruh isinya secara permanen dari Cloudflare R2 / S3?`
+                                      )
+                                    ) {
+                                      onDeleteFolder(folder.prefix);
+                                    }
+                                  }}
+                                  className="p-1.5 rounded-lg bg-slate-950 hover:bg-rose-950/70 border border-slate-800 hover:border-rose-800 text-slate-400 hover:text-rose-400 transition-colors"
+                                  title={`Hapus folder ${folder.name}`}
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))}

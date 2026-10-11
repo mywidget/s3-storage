@@ -30,10 +30,12 @@ import {
   Layers,
   ChevronDown,
   PieChart,
+  ArrowRightLeft,
 } from 'lucide-react';
-import { StorageFile, StorageUsageSummary } from '../types';
+import { StorageFile, StorageUsageSummary, MoveItemTarget } from '../types';
 import { formatBytes, formatDate, truncateHash, getFileCategory } from '../services/cryptoClient';
 import { FileTableSkeleton, FolderCardsSkeleton } from './Skeletons';
+import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 
 interface FileBrowserProps {
   files: StorageFile[];
@@ -54,6 +56,8 @@ interface FileBrowserProps {
   isRecursive: boolean;
   onToggleRecursive: (recursive: boolean) => void;
   onCreateFolder: (folderName: string) => Promise<void>;
+  onDeleteFolder?: (folderPrefix: string) => Promise<void>;
+  onMoveItem?: (target: MoveItemTarget) => void;
   isTruncated?: boolean;
   onLoadMore?: () => void;
   isLoadingMore?: boolean;
@@ -83,6 +87,8 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({
   isRecursive,
   onToggleRecursive,
   onCreateFolder,
+  onDeleteFolder,
+  onMoveItem,
   isTruncated,
   onLoadMore,
   isLoadingMore,
@@ -99,6 +105,15 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [creatingFolderLoading, setCreatingFolderLoading] = useState(false);
+  const [deleteConfirmState, setDeleteConfirmState] = useState<{
+    targetType: 'file' | 'folder' | 'batch';
+    name: string;
+    path?: string;
+    size?: number;
+    fileCount?: number;
+    itemsList?: string[];
+    onConfirm: () => Promise<void> | void;
+  } | null>(null);
 
   const handleCopyPublicUrl = (file: StorageFile) => {
     const url = file.publicUrl || `https://storage.printpro.my.id/${file.key}`;
@@ -346,14 +361,42 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({
           {selectedKeys.size > 0 && (
             <div className="flex items-center gap-2 pr-2 border-r border-slate-800">
               <span className="text-slate-400">{selectedKeys.size} dipilih</span>
+              {onMoveItem && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const keys = Array.from(selectedKeys);
+                    onMoveItem({
+                      type: 'batch_files',
+                      name: `${keys.length} File Terpilih`,
+                      sourcePath: keys[0],
+                      keys,
+                      fileCount: keys.length,
+                    });
+                  }}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded bg-sky-950/50 border border-sky-800 text-sky-300 hover:bg-sky-900/50 transition-colors"
+                  title="Pindahkan file terpilih ke bucket atau endpoint lain"
+                >
+                  <ArrowRightLeft className="w-3 h-3" />
+                  <span>Pindahkan Terpilih</span>
+                </button>
+              )}
               <button
                 onClick={() => {
-                  if (confirm(`Hapus ${selectedKeys.size} file terpilih dari Cloudflare R2?`)) {
-                    onBatchDelete(Array.from(selectedKeys));
-                    setSelectedKeys(new Set());
-                  }
+                  const keysArray = Array.from(selectedKeys);
+                  setDeleteConfirmState({
+                    targetType: 'batch',
+                    name: `${keysArray.length} Berkas Terpilih`,
+                    itemsList: keysArray,
+                    fileCount: keysArray.length,
+                    onConfirm: async () => {
+                      await onBatchDelete(keysArray);
+                      setSelectedKeys(new Set());
+                    },
+                  });
                 }}
                 className="flex items-center gap-1 px-2.5 py-1 rounded bg-rose-950/50 border border-rose-900 text-rose-300 hover:bg-rose-900/50 transition-colors"
+                title="Hapus semua berkas yang dipilih"
               >
                 <Trash2 className="w-3 h-3" />
                 <span>Hapus Terpilih</span>
@@ -363,14 +406,61 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({
 
           {/* New Folder Action Button */}
           {!isCreatingFolder ? (
-            <button
-              onClick={() => setIsCreatingFolder(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
-              title="Buat folder baru di path saat ini"
-            >
-              <FolderPlus className="w-3.5 h-3.5 text-emerald-400" />
-              <span>+ Folder Baru</span>
-            </button>
+            <div className="flex items-center gap-1.5">
+              {currentPrefix && onMoveItem && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const folderName = currentPrefix.replace(/\/$/, '').split('/').pop() || currentPrefix;
+                    const stats = folderStatsMap?.[currentPrefix];
+                    onMoveItem({
+                      type: 'folder',
+                      name: folderName,
+                      sourcePath: currentPrefix,
+                      fileCount: stats?.fileCount ?? files.length,
+                      totalSize: stats?.totalSizeBytes,
+                    });
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-sky-950/40 border border-sky-800/60 text-sky-300 hover:bg-sky-900/50 hover:text-white transition-colors"
+                  title={`Pindahkan folder ini (${currentPrefix}) ke bucket atau endpoint lain`}
+                >
+                  <ArrowRightLeft className="w-3.5 h-3.5 text-sky-400" />
+                  <span className="hidden sm:inline">Pindahkan Folder</span>
+                </button>
+              )}
+              {currentPrefix && onDeleteFolder && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const folderName = currentPrefix.replace(/\/$/, '').split('/').pop() || currentPrefix;
+                    const stats = folderStatsMap?.[currentPrefix];
+                    setDeleteConfirmState({
+                      targetType: 'folder',
+                      name: folderName,
+                      path: currentPrefix,
+                      fileCount: stats?.fileCount ?? files.length,
+                      size: stats?.totalSizeBytes,
+                      onConfirm: async () => {
+                        await onDeleteFolder(currentPrefix);
+                      },
+                    });
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-rose-950/40 border border-rose-900/60 text-rose-300 hover:bg-rose-900/50 hover:text-white transition-colors"
+                  title={`Hapus folder ini (${currentPrefix}) beserta seluruh isinya`}
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                  <span className="hidden sm:inline">Hapus Folder Ini</span>
+                </button>
+              )}
+              <button
+                onClick={() => setIsCreatingFolder(true)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+                title="Buat folder baru di path saat ini"
+              >
+                <FolderPlus className="w-3.5 h-3.5 text-emerald-400" />
+                <span>+ Folder Baru</span>
+              </button>
+            </div>
           ) : (
             <form onSubmit={handleCreateFolderSubmit} className="flex items-center gap-1.5">
               <input
@@ -474,17 +564,60 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({
                     );
 
                   return (
-                    <button
+                    <div
                       key={folderPrefix}
                       onClick={() => onNavigateFolder(folderPrefix)}
-                      className="flex flex-col justify-between p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-emerald-500/50 hover:bg-slate-850 text-left transition-all group shadow-sm"
+                      className="flex flex-col justify-between p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-emerald-500/50 hover:bg-slate-850 text-left transition-all group shadow-sm cursor-pointer select-none"
                     >
                       <div className="flex items-center justify-between w-full mb-1">
                         <div className="flex items-center gap-2 min-w-0 flex-1">
                           <Folder className="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform flex-shrink-0" />
                           <span className="text-xs text-slate-100 font-semibold truncate">{folderName}</span>
                         </div>
-                        <ChevronRight className="w-3.5 h-3.5 text-slate-600 group-hover:text-slate-300 flex-shrink-0 ml-1" />
+                        <div className="flex items-center gap-0.5 flex-shrink-0 ml-1">
+                          {onMoveItem && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onMoveItem({
+                                  type: 'folder',
+                                  name: folderName,
+                                  sourcePath: folderPrefix,
+                                  fileCount: stats?.fileCount,
+                                  totalSize: stats?.totalSizeBytes,
+                                });
+                              }}
+                              className="opacity-70 sm:opacity-0 group-hover:opacity-100 p-1 rounded-md text-slate-400 hover:text-sky-400 hover:bg-sky-950/70 border border-transparent hover:border-sky-900/60 transition-all"
+                              title={`Pindahkan folder "${folderName}" ke bucket atau endpoint lain`}
+                            >
+                              <ArrowRightLeft className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          {onDeleteFolder && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeleteConfirmState({
+                                  targetType: 'folder',
+                                  name: folderName,
+                                  path: folderPrefix,
+                                  fileCount: stats?.fileCount,
+                                  size: stats?.totalSizeBytes,
+                                  onConfirm: async () => {
+                                    await onDeleteFolder(folderPrefix);
+                                  },
+                                });
+                              }}
+                              className="opacity-70 sm:opacity-0 group-hover:opacity-100 p-1 rounded-md text-slate-400 hover:text-rose-400 hover:bg-rose-950/70 border border-transparent hover:border-rose-900/60 transition-all"
+                              title={`Hapus folder "${folderName}"`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          <ChevronRight className="w-3.5 h-3.5 text-slate-600 group-hover:text-slate-300" />
+                        </div>
                       </div>
 
                       {stats ? (
@@ -505,7 +638,7 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({
                           <span className="text-slate-400 font-medium">0 B</span>
                         </div>
                       )}
-                    </button>
+                    </div>
                   );
                 })}
               </div>
@@ -677,13 +810,36 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({
                     <ShieldCheck className="w-3.5 h-3.5" />
                   </button>
 
+                  {onMoveItem && (
+                    <button
+                      onClick={() =>
+                        onMoveItem({
+                          type: 'file',
+                          name: file.name,
+                          sourcePath: file.key,
+                          totalSize: file.originalSize || file.size,
+                        })
+                      }
+                      className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-sky-400 text-xs flex items-center justify-center"
+                      title="Pindahkan / Salin File ke Bucket Lain"
+                    >
+                      <ArrowRightLeft className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+
                   <button
                     onClick={() => {
-                      if (confirm(`Hapus file "${file.name}" secara permanen dari Cloudflare R2?`)) {
-                        onDelete(file);
-                      }
+                      setDeleteConfirmState({
+                        targetType: 'file',
+                        name: file.name,
+                        path: file.key,
+                        size: file.originalSize || file.size,
+                        onConfirm: async () => {
+                          await onDelete(file);
+                        },
+                      });
                     }}
-                    className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-500 hover:text-rose-400 text-xs flex items-center justify-center"
+                    className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-500 hover:text-rose-400 text-xs flex items-center justify-center transition-colors"
                     title="Hapus File"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -911,12 +1067,36 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({
                           <ShieldCheck className="w-3.5 h-3.5" />
                         </button>
 
+                        {/* Move / Copy */}
+                        {onMoveItem && (
+                          <button
+                            onClick={() =>
+                              onMoveItem({
+                                type: 'file',
+                                name: file.name,
+                                sourcePath: file.key,
+                                totalSize: file.originalSize || file.size,
+                              })
+                            }
+                            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-sky-400 transition-colors"
+                            title="Pindahkan / Salin File ke Bucket atau Endpoint Lain"
+                          >
+                            <ArrowRightLeft className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+
                         {/* Delete */}
                         <button
                           onClick={() => {
-                            if (confirm(`Hapus file "${file.name}" secara permanen dari Cloudflare R2?`)) {
-                              onDelete(file);
-                            }
+                            setDeleteConfirmState({
+                              targetType: 'file',
+                              name: file.name,
+                              path: file.key,
+                              size: file.originalSize || file.size,
+                              onConfirm: async () => {
+                                await onDelete(file);
+                              },
+                            });
                           }}
                           className="p-1.5 rounded hover:bg-slate-800 text-slate-500 hover:text-rose-400 transition-colors"
                           title="Hapus File"
@@ -970,6 +1150,21 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({
           </button>
         )}
       </div>
+
+      {/* Modal Konfirmasi Hapus Objek (File / Folder / Batch) */}
+      {deleteConfirmState && (
+        <ConfirmDeleteModal
+          isOpen={Boolean(deleteConfirmState)}
+          onClose={() => setDeleteConfirmState(null)}
+          targetType={deleteConfirmState.targetType}
+          name={deleteConfirmState.name}
+          path={deleteConfirmState.path}
+          size={deleteConfirmState.size}
+          fileCount={deleteConfirmState.fileCount}
+          itemsList={deleteConfirmState.itemsList}
+          onConfirm={deleteConfirmState.onConfirm}
+        />
+      )}
     </div>
   );
 };

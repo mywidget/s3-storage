@@ -1,0 +1,24 @@
+[
+  {
+    "id": "printpro",
+    "name": "Cloudflare R2 - PrintPro",
+    "endpoint": "https://5bf2ce4e6d2a743ce9d1a930dcc5161a.r2.cloudflarestorage.com",
+    "region": "auto",
+    "bucket": "printpro-storage",
+    "accessKeyId": "92e5bda32b3c2c5ee7442f2a47aa17ff",
+    "secretAccessKey": "205529c3e3b1f53c1d0a58fd3718bec7c986b758e3a8feccea1595f0f572efd9",
+    "publicUrl": "https://storage.printpro.my.id",
+    "masterKey": "cloudvault-auto-encryption-master-key-2026"
+  },
+  {
+    "id": "s3printpro",
+    "name": "Cloudflare R2 - WaCRM",
+    "endpoint": "https://9bb589d59f0a4dc03b264c5ba5925a1e.r2.cloudflarestorage.com",
+    "region": "auto",
+    "bucket": "printpro",
+    "accessKeyId": "53d9cd8c056678b9211af0ee8c84b29b",
+    "secretAccessKey": "1511f7a4a3fdc9a5d01827d1aa631d6f0f45469d6104f932f9ec6fd0a34a76f9",
+    "publicUrl": "https://s3printpro.thm.my.id",
+    "masterKey": "cloudvault-auto-encryption-master-key-2026"
+  }
+]

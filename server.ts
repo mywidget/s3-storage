@@ -38,22 +38,122 @@ interface StorageProfile {
   masterKey: string;
 }
 
-// Function to load all profiles from environment variables
-function loadProfilesFromEnv(): StorageProfile[] {
-  const profiles: StorageProfile[] = [];
+const ENV_FILE_PATH = path.join(__dirname, '.env');
+const CUSTOM_PROFILES_PATH = path.join(__dirname, 'storage_profiles.json');
 
-  // 1. Scan numbered endpoints ENDPOINT_1_*, ENDPOINT_2_*, etc.
-  for (let i = 1; i <= 20; i++) {
-    const url = process.env[`ENDPOINT_${i}_URL`];
-    const bucket = process.env[`ENDPOINT_${i}_BUCKET`];
+// Read raw .env file dynamically so manual edits are recognized immediately without server restart
+function getParsedEnv(): Record<string, string> {
+  try {
+    if (fs.existsSync(ENV_FILE_PATH)) {
+      const content = fs.readFileSync(ENV_FILE_PATH, 'utf-8');
+      return dotenv.parse(content);
+    }
+  } catch (err) {
+    console.error('Error reading .env file:', err);
+  }
+  return { ...process.env } as Record<string, string>;
+}
+
+// Load custom endpoints saved via UI
+function loadCustomProfiles(): StorageProfile[] {
+  try {
+    if (fs.existsSync(CUSTOM_PROFILES_PATH)) {
+      const content = fs.readFileSync(CUSTOM_PROFILES_PATH, 'utf-8');
+      const data = JSON.parse(content);
+      if (Array.isArray(data)) return data;
+    }
+  } catch (err) {
+    console.error('Error reading storage_profiles.json:', err);
+  }
+  return [];
+}
+
+// Save custom endpoints to JSON backup
+function saveCustomProfiles(profiles: StorageProfile[]) {
+  try {
+    fs.writeFileSync(CUSTOM_PROFILES_PATH, JSON.stringify(profiles, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Error saving storage_profiles.json:', err);
+  }
+}
+
+// Synchronize all endpoints and active endpoint back into .env file persistently
+function syncEnvFile(activeId: string, profiles: StorageProfile[]) {
+  try {
+    let existingContent = '';
+    if (fs.existsSync(ENV_FILE_PATH)) {
+      existingContent = fs.readFileSync(ENV_FILE_PATH, 'utf-8');
+    }
+
+    const nonEndpointLines: string[] = [];
+    const lines = existingContent.split(/\r?\n/);
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      // Remove previous numbered ENDPOINT_* and ACTIVE_STORAGE_ENDPOINT_ID lines
+      if (
+        trimmed.startsWith('ACTIVE_STORAGE_ENDPOINT_ID=') ||
+        /^ENDPOINT_\d+_/.test(trimmed)
+      ) {
+        continue;
+      }
+      nonEndpointLines.push(line);
+    }
+
+    while (nonEndpointLines.length > 0 && nonEndpointLines[nonEndpointLines.length - 1].trim() === '') {
+      nonEndpointLines.pop();
+    }
+
+    const endpointLines: string[] = [
+      '',
+      '# ================================================================',
+      '# Multi-Endpoint S3 / Cloudflare R2 Configuration (Auto-Persisted)',
+      '# ================================================================',
+      `ACTIVE_STORAGE_ENDPOINT_ID="${activeId}"`,
+      '',
+    ];
+
+    profiles.forEach((p, idx) => {
+      const num = idx + 1;
+      endpointLines.push(`# --- ENDPOINT ${num}: ${p.name} ---`);
+      endpointLines.push(`ENDPOINT_${num}_ID="${p.id}"`);
+      endpointLines.push(`ENDPOINT_${num}_NAME="${p.name}"`);
+      endpointLines.push(`ENDPOINT_${num}_URL="${p.endpoint}"`);
+      endpointLines.push(`ENDPOINT_${num}_REGION="${p.region || 'auto'}"`);
+      endpointLines.push(`ENDPOINT_${num}_BUCKET="${p.bucket}"`);
+      endpointLines.push(`ENDPOINT_${num}_KEY_ID="${p.accessKeyId}"`);
+      endpointLines.push(`ENDPOINT_${num}_SECRET="${p.secretAccessKey}"`);
+      if (p.publicUrl) {
+        endpointLines.push(`ENDPOINT_${num}_PUBLIC_URL="${p.publicUrl}"`);
+      }
+      endpointLines.push('');
+    });
+
+    const newEnvContent = [...nonEndpointLines, ...endpointLines].join('\n') + '\n';
+    fs.writeFileSync(ENV_FILE_PATH, newEnvContent, 'utf-8');
+  } catch (err) {
+    console.error('Error syncing .env file:', err);
+  }
+}
+
+// Function to load all profiles from .env dynamically + custom storage
+function loadAllProfiles(): StorageProfile[] {
+  const envMap = getParsedEnv();
+  const profiles: StorageProfile[] = [];
+  const seenIds = new Set<string>();
+
+  // 1. Scan numbered endpoints ENDPOINT_1_*, ENDPOINT_2_*, etc. from current .env file
+  for (let i = 1; i <= 50; i++) {
+    const url = envMap[`ENDPOINT_${i}_URL`] || process.env[`ENDPOINT_${i}_URL`];
+    const bucket = envMap[`ENDPOINT_${i}_BUCKET`] || process.env[`ENDPOINT_${i}_BUCKET`];
     if (url && bucket) {
-      const id = process.env[`ENDPOINT_${i}_ID`] || `endpoint-${i}`;
-      const name = process.env[`ENDPOINT_${i}_NAME`] || `Endpoint ${i} (${bucket})`;
-      const region = process.env[`ENDPOINT_${i}_REGION`] || 'auto';
-      const keyId = process.env[`ENDPOINT_${i}_KEY_ID`] || process.env.S3_ACCESS_KEY_ID || '';
-      const secret = process.env[`ENDPOINT_${i}_SECRET`] || process.env.S3_SECRET_ACCESS_KEY || '';
-      const pubUrl = process.env[`ENDPOINT_${i}_PUBLIC_URL`] || '';
-      const masterKey = process.env.VAULT_MASTER_KEY || 'cloudvault-auto-encryption-master-key-2026';
+      const id = envMap[`ENDPOINT_${i}_ID`] || process.env[`ENDPOINT_${i}_ID`] || `endpoint-${i}`;
+      const name = envMap[`ENDPOINT_${i}_NAME`] || process.env[`ENDPOINT_${i}_NAME`] || `Endpoint ${i} (${bucket})`;
+      const region = envMap[`ENDPOINT_${i}_REGION`] || process.env[`ENDPOINT_${i}_REGION`] || 'auto';
+      const keyId = envMap[`ENDPOINT_${i}_KEY_ID`] || process.env[`ENDPOINT_${i}_KEY_ID`] || envMap.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY_ID || '';
+      const secret = envMap[`ENDPOINT_${i}_SECRET`] || process.env[`ENDPOINT_${i}_SECRET`] || envMap.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_ACCESS_KEY || '';
+      const pubUrl = envMap[`ENDPOINT_${i}_PUBLIC_URL`] || process.env[`ENDPOINT_${i}_PUBLIC_URL`] || '';
+      const masterKey = envMap.VAULT_MASTER_KEY || process.env.VAULT_MASTER_KEY || 'cloudvault-auto-encryption-master-key-2026';
 
       profiles.push({
         id,
@@ -66,25 +166,33 @@ function loadProfilesFromEnv(): StorageProfile[] {
         publicUrl: pubUrl,
         masterKey,
       });
+      seenIds.add(id);
     }
   }
 
-  // 2. Fallback to standard S3_* variables if no numbered endpoints or if default not included
-  const defaultEndpoint = process.env.S3_ENDPOINT || 'https://5bf2ce4e6d2a743ce9d1a930dcc5161a.r2.cloudflarestorage.com';
-  const defaultBucket = process.env.S3_BUCKET || 'printpro-storage';
-  const alreadyExists = profiles.some((p) => p.endpoint === defaultEndpoint && p.bucket === defaultBucket);
+  // 2. Load from storage_profiles.json
+  const custom = loadCustomProfiles();
+  for (const c of custom) {
+    if (!seenIds.has(c.id)) {
+      profiles.push(c);
+      seenIds.add(c.id);
+    }
+  }
 
-  if (!alreadyExists && defaultEndpoint && defaultBucket) {
-    profiles.unshift({
+  // 3. Fallback to standard S3_* variables if empty
+  const defaultEndpoint = envMap.S3_ENDPOINT || process.env.S3_ENDPOINT;
+  const defaultBucket = envMap.S3_BUCKET || process.env.S3_BUCKET;
+  if (profiles.length === 0 && defaultEndpoint && defaultBucket) {
+    profiles.push({
       id: 'default',
       name: `Primary Storage (${defaultBucket})`,
       endpoint: defaultEndpoint,
-      region: process.env.S3_REGION || 'auto',
+      region: envMap.S3_REGION || process.env.S3_REGION || 'auto',
       bucket: defaultBucket,
-      accessKeyId: process.env.S3_ACCESS_KEY_ID || '92e5bda32b3c2c5ee7442f2a47aa17ff',
-      secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || '205529c3e3b1f53c1d0a58fd3718bec7c986b758e3a8feccea1595f0f572efd9',
-      masterKey: process.env.VAULT_MASTER_KEY || 'cloudvault-auto-encryption-master-key-2026',
-      publicUrl: process.env.S3_PUBLIC_URL || 'https://storage.printpro.my.id',
+      accessKeyId: envMap.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY_ID || '',
+      secretAccessKey: envMap.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_ACCESS_KEY || '',
+      masterKey: envMap.VAULT_MASTER_KEY || process.env.VAULT_MASTER_KEY || 'cloudvault-auto-encryption-master-key-2026',
+      publicUrl: envMap.S3_PUBLIC_URL || process.env.S3_PUBLIC_URL || '',
     });
   }
 
@@ -92,8 +200,8 @@ function loadProfilesFromEnv(): StorageProfile[] {
 }
 
 // Storage Profiles state
-let storageProfiles: StorageProfile[] = loadProfilesFromEnv();
-let activeProfileId = process.env.ACTIVE_STORAGE_ENDPOINT_ID || (storageProfiles[0] ? storageProfiles[0].id : 'default');
+let storageProfiles: StorageProfile[] = loadAllProfiles();
+let activeProfileId = getParsedEnv().ACTIVE_STORAGE_ENDPOINT_ID || process.env.ACTIVE_STORAGE_ENDPOINT_ID || (storageProfiles[0] ? storageProfiles[0].id : 'default');
 
 // Helper to get active profile safely
 function getActiveProfile(): StorageProfile {
@@ -152,6 +260,20 @@ const upload = multer({
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Security guard: Block direct HTTP access to sensitive config files (.env, storage_profiles.json, keys)
+app.use((req, res, next) => {
+  const normalized = req.path.toLowerCase();
+  if (
+    normalized.includes('.env') ||
+    normalized.includes('storage_profiles.json') ||
+    normalized.endsWith('.key') ||
+    normalized.endsWith('.pem')
+  ) {
+    return res.status(403).json({ error: 'Access denied: protected configuration file' });
+  }
+  next();
+});
 
 // Disable caching on all API endpoints to ensure real-time accuracy on refresh
 app.use('/api', (_req, res, next) => {
@@ -401,6 +523,11 @@ app.get('/api/health', async (_req: Request, res: Response) => {
 
 // Get all configured endpoints
 app.get('/api/endpoints', (_req: Request, res: Response) => {
+  storageProfiles = loadAllProfiles();
+  const envMap = getParsedEnv();
+  if (envMap.ACTIVE_STORAGE_ENDPOINT_ID && storageProfiles.some((p) => p.id === envMap.ACTIVE_STORAGE_ENDPOINT_ID)) {
+    activeProfileId = envMap.ACTIVE_STORAGE_ENDPOINT_ID;
+  }
   const active = getActiveProfile();
   res.json({
     activeEndpointId: active.id,
@@ -440,6 +567,9 @@ app.post('/api/endpoints/switch', async (req: Request, res: Response) => {
     if (!endpointId) {
       return res.status(400).json({ error: 'Parameter endpointId diperlukan' });
     }
+
+    // Refresh profiles first
+    storageProfiles = loadAllProfiles();
 
     const targetProfile = storageProfiles.find((p) => p.id === endpointId);
     if (!targetProfile) {
@@ -481,6 +611,10 @@ app.post('/api/endpoints/switch', async (req: Request, res: Response) => {
     cachedRootFilesSize = 0;
     scanEntireBucketSummary(true).catch(() => {});
 
+    // Simpan status aktif ke file konfigurasi (.env dan storage_profiles.json)
+    saveCustomProfiles(storageProfiles);
+    syncEnvFile(activeProfileId, storageProfiles);
+
     res.json({
       success: true,
       message: `Berhasil beralih ke endpoint "${targetProfile.name}"!`,
@@ -510,6 +644,7 @@ app.post('/api/endpoints/test', async (req: Request, res: Response) => {
     let { endpointId, endpoint, region, bucket, accessKeyId, secretAccessKey } = req.body;
 
     if (endpointId) {
+      storageProfiles = loadAllProfiles();
       const found = storageProfiles.find((p) => p.id === endpointId);
       if (found) {
         endpoint = found.endpoint;
@@ -558,10 +693,10 @@ app.post('/api/endpoints/test', async (req: Request, res: Response) => {
   }
 });
 
-// Upsert (Add or Update) an endpoint profile
+// Upsert (Add or Update) an endpoint profile with disk and .env persistence
 app.post('/api/endpoints/upsert', async (req: Request, res: Response) => {
   try {
-    const { id, name, endpoint, region, bucket, accessKeyId, secretAccessKey, publicUrl, makeActive } = req.body;
+    const { id, name, endpoint, region, bucket, accessKeyId, secretAccessKey, publicUrl, makeActive, skipVerify } = req.body;
 
     if (!endpoint || !bucket) {
       return res.status(400).json({ error: 'Endpoint URL dan Bucket tidak boleh kosong' });
@@ -570,23 +705,40 @@ app.post('/api/endpoints/upsert', async (req: Request, res: Response) => {
     const targetId = id || `custom-${Date.now().toString(36)}`;
     const targetName = name || `Storage (${bucket})`;
 
-    // Verify connection first
-    const testClient = new S3Client({
-      region: region || 'auto',
-      endpoint,
-      credentials: {
-        accessKeyId: accessKeyId || storageConfig.accessKeyId,
-        secretAccessKey: secretAccessKey || storageConfig.secretAccessKey,
-      },
-      forcePathStyle: true,
-    });
+    // Verify connection if not explicitly skipped
+    if (!skipVerify) {
+      try {
+        const testClient = new S3Client({
+          region: region || 'auto',
+          endpoint,
+          credentials: {
+            accessKeyId: accessKeyId || storageConfig.accessKeyId,
+            secretAccessKey: secretAccessKey || storageConfig.secretAccessKey,
+          },
+          forcePathStyle: true,
+        });
 
-    const testCommand = new ListObjectsV2Command({
-      Bucket: bucket,
-      MaxKeys: 1,
-    });
-    await testClient.send(testCommand);
+        const testCommand = new ListObjectsV2Command({
+          Bucket: bucket,
+          MaxKeys: 1,
+        });
+        await testClient.send(testCommand);
+      } catch (verifyErr: any) {
+        const errMsg =
+          verifyErr.name === 'NoSuchBucket'
+            ? `Bucket "${bucket}" tidak ditemukan di endpoint ini.`
+            : verifyErr.name === 'AccessDenied'
+            ? `Akses ditolak (Access Denied) ke bucket "${bucket}". Periksa izin atau Access Key ID & Secret Access Key.`
+            : (verifyErr.message || 'Gagal memverifikasi koneksi storage');
+        return res.status(400).json({
+          success: false,
+          message: errMsg,
+          canForceSave: true,
+        });
+      }
+    }
 
+    storageProfiles = loadAllProfiles();
     const existingIndex = storageProfiles.findIndex((p) => p.id === targetId);
     const newProfile: StorageProfile = {
       id: targetId,
@@ -616,9 +768,13 @@ app.post('/api/endpoints/upsert', async (req: Request, res: Response) => {
       scanEntireBucketSummary(true).catch(() => {});
     }
 
+    // SIMPAN KE DISK (.env dan storage_profiles.json) SECARA PERSISTEN!
+    saveCustomProfiles(storageProfiles);
+    syncEnvFile(activeProfileId, storageProfiles);
+
     res.json({
       success: true,
-      message: `Endpoint "${targetName}" berhasil disimpan!`,
+      message: `Endpoint "${targetName}" berhasil disimpan ke sistem dan konfigurasi .env!`,
       endpoint: {
         ...newProfile,
         accessKeyIdMasked: newProfile.accessKeyId
@@ -629,22 +785,18 @@ app.post('/api/endpoints/upsert', async (req: Request, res: Response) => {
       },
     });
   } catch (err: any) {
-    const errMsg =
-      err.name === 'NoSuchBucket'
-        ? `Bucket "${req.body.bucket}" tidak ditemukan di endpoint ini.`
-        : err.name === 'AccessDenied'
-        ? `Akses ditolak (Access Denied) ke bucket "${req.body.bucket}". Periksa izin atau Access Key.`
-        : (err.message || 'Gagal memverifikasi dan menyimpan endpoint');
     res.status(400).json({
       success: false,
-      message: errMsg,
+      message: err.message || 'Gagal menyimpan endpoint',
     });
   }
 });
 
-// Delete an endpoint profile
+// Delete an endpoint profile with disk and .env persistence
 app.delete('/api/endpoints/:id', (req: Request, res: Response) => {
   const targetId = req.params.id;
+  storageProfiles = loadAllProfiles();
+
   if (storageProfiles.length <= 1) {
     return res.status(400).json({ error: 'Tidak dapat menghapus endpoint terakhir' });
   }
@@ -666,9 +818,13 @@ app.delete('/api/endpoints/:id', (req: Request, res: Response) => {
     scanEntireBucketSummary(true).catch(() => {});
   }
 
+  // Persist deletion
+  saveCustomProfiles(storageProfiles);
+  syncEnvFile(activeProfileId, storageProfiles);
+
   res.json({
     success: true,
-    message: `Endpoint "${removed.name}" telah dihapus`,
+    message: `Endpoint "${removed.name}" telah dihapus dari sistem dan .env`,
     activeEndpointId: activeProfileId,
   });
 });
@@ -1104,6 +1260,488 @@ app.post('/api/folders', async (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(500).json({
       error: 'Gagal membuat folder di storage',
+      details: err.message,
+    });
+  }
+});
+
+// Delete Virtual Folder and all its contained objects
+app.delete('/api/folders', async (req: Request, res: Response) => {
+  try {
+    const s3 = getS3Client();
+    const rawPath = (req.body?.folderPath || req.query?.folderPath) as string;
+    if (!rawPath || !rawPath.trim()) {
+      return res.status(400).json({ error: 'Nama atau path folder tidak boleh kosong' });
+    }
+
+    // Normalisasi path folder (harus berakhiran '/')
+    const cleanPrefix = rawPath.replace(/^\/+/, '').replace(/\/+$/, '') + '/';
+
+    let totalDeleted = 0;
+    let continuationToken: string | undefined = undefined;
+    let isTruncated = true;
+
+    // Hapus seluruh objek yang berada di dalam path prefix ini secara bertahap (batch per 1000)
+    while (isTruncated) {
+      const listRes: ListObjectsV2CommandOutput = await s3.send(
+        new ListObjectsV2Command({
+          Bucket: storageConfig.bucket,
+          Prefix: cleanPrefix,
+          MaxKeys: 1000,
+          ContinuationToken: continuationToken,
+        })
+      );
+
+      const items = listRes.Contents || [];
+      const keysToDelete = items
+        .map((item) => item.Key)
+        .filter((key): key is string => Boolean(key));
+
+      if (keysToDelete.length > 0) {
+        const deleteRes = await s3.send(
+          new DeleteObjectsCommand({
+            Bucket: storageConfig.bucket,
+            Delete: {
+              Objects: keysToDelete.map((k) => ({ Key: k })),
+              Quiet: false,
+            },
+          })
+        );
+        totalDeleted += deleteRes.Deleted?.length || keysToDelete.length;
+      }
+
+      isTruncated = Boolean(listRes.IsTruncated);
+      continuationToken = listRes.NextContinuationToken;
+    }
+
+    // Pastikan marker folder itu sendiri juga terhapus jika belum terdeteksi di batch
+    try {
+      await s3.send(
+        new DeleteObjectCommand({
+          Bucket: storageConfig.bucket,
+          Key: cleanPrefix,
+        })
+      );
+    } catch {
+      // Abaikan jika sudah terhapus
+    }
+
+    // Bersihkan cache folder stats
+    cachedFolderStats.delete(cleanPrefix);
+    for (const key of cachedFolderStats.keys()) {
+      if (key.startsWith(cleanPrefix)) {
+        cachedFolderStats.delete(key);
+      }
+    }
+    scanEntireBucketSummary(true).catch(() => {});
+
+    res.json({
+      success: true,
+      message: `Folder "${cleanPrefix}" beserta ${totalDeleted} objek di dalamnya berhasil dihapus.`,
+      deletedObjectsCount: totalDeleted,
+      folder: cleanPrefix,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      error: 'Gagal menghapus folder dari cloud storage',
+      details: err.message,
+    });
+  }
+});
+
+// ============================================================================
+// === CROSS-BUCKET & CROSS-ENDPOINT MOVE / COPY OPERATIONS ===
+// ============================================================================
+
+// Helper to resolve S3Client and Bucket from profile ID or custom credentials
+function resolveS3Context(options: {
+  endpointId?: string;
+  endpoint?: string;
+  region?: string;
+  bucket?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+}) {
+  let profile = options.endpointId ? storageProfiles.find((p) => p.id === options.endpointId) : null;
+  if (!profile && !options.endpoint) {
+    profile = getActiveProfile();
+  }
+
+  const endpoint = options.endpoint || (profile ? profile.endpoint : storageConfig.endpoint);
+  const region = options.region || (profile ? profile.region : storageConfig.region) || 'auto';
+  const bucket = options.bucket || (profile ? profile.bucket : storageConfig.bucket);
+  const accessKeyId = options.accessKeyId || (profile ? profile.accessKeyId : storageConfig.accessKeyId);
+  const secretAccessKey = options.secretAccessKey || (profile ? profile.secretAccessKey : storageConfig.secretAccessKey);
+
+  const client = new S3Client({
+    region,
+    endpoint,
+    credentials: {
+      accessKeyId,
+      secretAccessKey,
+    },
+    forcePathStyle: true,
+  });
+
+  return {
+    client,
+    bucket,
+    endpoint,
+    region,
+    profileName: profile ? profile.name : endpoint,
+    profileId: profile?.id,
+  };
+}
+
+// Helper to transfer single object preserving metadata & encryption
+async function transferObject({
+  sourceClient,
+  sourceBucket,
+  sourceKey,
+  targetClient,
+  targetBucket,
+  targetKey,
+  isMove,
+}: {
+  sourceClient: S3Client;
+  sourceBucket: string;
+  sourceKey: string;
+  targetClient: S3Client;
+  targetBucket: string;
+  targetKey: string;
+  isMove: boolean;
+}): Promise<{ bytes: number }> {
+  // 1. Get object and metadata from source
+  const getRes = await sourceClient.send(
+    new GetObjectCommand({
+      Bucket: sourceBucket,
+      Key: sourceKey,
+    })
+  );
+
+  if (!getRes.Body) {
+    throw new Error(`Objek sumber "${sourceKey}" tidak memiliki isi data`);
+  }
+
+  const fileBuffer = await streamToBuffer(getRes.Body as Readable);
+  const contentLength = getRes.ContentLength ?? fileBuffer.length;
+
+  // 2. Put object to destination with exact metadata preserved
+  await targetClient.send(
+    new PutObjectCommand({
+      Bucket: targetBucket,
+      Key: targetKey,
+      Body: fileBuffer,
+      ContentType: getRes.ContentType || 'application/octet-stream',
+      ContentLength: contentLength,
+      Metadata: getRes.Metadata || {},
+    })
+  );
+
+  // 3. Delete from source if moving (not copying)
+  if (isMove) {
+    await sourceClient.send(
+      new DeleteObjectCommand({
+        Bucket: sourceBucket,
+        Key: sourceKey,
+      })
+    );
+  }
+
+  return { bytes: contentLength };
+}
+
+// Verify accessibility of destination bucket on selected or custom endpoint
+app.post('/api/storage/verify-target', async (req: Request, res: Response) => {
+  try {
+    const { endpointId, endpoint, region, bucket, accessKeyId, secretAccessKey } = req.body;
+    if (!bucket || !bucket.trim()) {
+      return res.status(400).json({ error: 'Nama bucket tujuan wajib diisi' });
+    }
+
+    const target = resolveS3Context({
+      endpointId,
+      endpoint,
+      region,
+      bucket: bucket.trim(),
+      accessKeyId,
+      secretAccessKey,
+    });
+
+    const startTime = Date.now();
+    await target.client.send(new ListObjectsV2Command({ Bucket: target.bucket, MaxKeys: 1 }));
+    const latencyMs = Date.now() - startTime;
+
+    res.json({
+      success: true,
+      bucket: target.bucket,
+      endpoint: target.endpoint,
+      latencyMs,
+      message: `Bucket "${target.bucket}" berhasil diverifikasi dan dapat diakses (${latencyMs}ms)`,
+    });
+  } catch (err: any) {
+    const errMsg =
+      err.name === 'NoSuchBucket'
+        ? `Bucket "${req.body.bucket}" tidak ditemukan pada endpoint ini.`
+        : err.name === 'AccessDenied'
+        ? `Akses ditolak ke bucket "${req.body.bucket}". Periksa kredensial atau izin akses.`
+        : (err.message || 'Gagal memverifikasi bucket tujuan');
+
+    res.status(400).json({
+      success: false,
+      error: errMsg,
+    });
+  }
+});
+
+// Move or copy file/folder across buckets and endpoints
+app.post('/api/storage/move', async (req: Request, res: Response) => {
+  try {
+    const {
+      type, // 'file' | 'folder' | 'batch_files'
+      sourceKey,
+      sourceKeys,
+      sourceFolder,
+      sourceEndpointId,
+      sourceBucket: explicitSourceBucket,
+      targetEndpointId,
+      targetBucket: rawTargetBucket,
+      targetFolderPrefix: rawTargetFolderPrefix,
+      targetEndpoint,
+      targetRegion,
+      targetAccessKeyId,
+      targetSecretAccessKey,
+      operation = 'move', // 'move' | 'copy'
+    } = req.body;
+
+    const isMove = operation !== 'copy';
+
+    // 1. Resolve Source S3 Context
+    const sourceContext = resolveS3Context({
+      endpointId: sourceEndpointId,
+      bucket: explicitSourceBucket,
+    });
+
+    // 2. Resolve Target S3 Context
+    if (!rawTargetBucket || !rawTargetBucket.trim()) {
+      return res.status(400).json({ error: 'Nama bucket tujuan wajib diisi' });
+    }
+
+    const targetContext = resolveS3Context({
+      endpointId: targetEndpointId,
+      endpoint: targetEndpoint,
+      region: targetRegion,
+      bucket: rawTargetBucket.trim(),
+      accessKeyId: targetAccessKeyId,
+      secretAccessKey: targetSecretAccessKey,
+    });
+
+    // Clean destination folder prefix
+    const cleanTargetPrefix = rawTargetFolderPrefix
+      ? rawTargetFolderPrefix.replace(/^\/+/, '').replace(/\/+$/, '') + '/'
+      : '';
+
+    let totalMoved = 0;
+    let totalBytes = 0;
+    const errors: string[] = [];
+
+    // --- CASE A: SINGLE FILE MOVE ---
+    if (type === 'file') {
+      if (!sourceKey || typeof sourceKey !== 'string') {
+        return res.status(400).json({ error: 'sourceKey file sumber wajib diisi' });
+      }
+
+      const fileName = sourceKey.split('/').pop() || sourceKey;
+      const targetKey = cleanTargetPrefix ? `${cleanTargetPrefix}${fileName}` : fileName;
+
+      // Validate identical location
+      if (
+        sourceContext.endpoint === targetContext.endpoint &&
+        sourceContext.bucket === targetContext.bucket &&
+        sourceKey === targetKey
+      ) {
+        return res.status(400).json({
+          error: 'Lokasi tujuan tidak boleh sama persis dengan berkas sumber.',
+        });
+      }
+
+      const { bytes } = await transferObject({
+        sourceClient: sourceContext.client,
+        sourceBucket: sourceContext.bucket,
+        sourceKey,
+        targetClient: targetContext.client,
+        targetBucket: targetContext.bucket,
+        targetKey,
+        isMove,
+      });
+
+      totalMoved = 1;
+      totalBytes = bytes;
+    }
+
+    // --- CASE B: BATCH FILES MOVE ---
+    else if (type === 'batch_files') {
+      if (!Array.isArray(sourceKeys) || sourceKeys.length === 0) {
+        return res.status(400).json({ error: 'Daftar berkas sumber (sourceKeys) tidak boleh kosong' });
+      }
+
+      for (const key of sourceKeys) {
+        try {
+          const fileName = key.split('/').pop() || key;
+          const targetKey = cleanTargetPrefix ? `${cleanTargetPrefix}${fileName}` : fileName;
+
+          if (
+            sourceContext.endpoint === targetContext.endpoint &&
+            sourceContext.bucket === targetContext.bucket &&
+            key === targetKey
+          ) {
+            errors.push(`Berkas "${key}": lokasi sumber dan tujuan identik, dilewati.`);
+            continue;
+          }
+
+          const { bytes } = await transferObject({
+            sourceClient: sourceContext.client,
+            sourceBucket: sourceContext.bucket,
+            sourceKey: key,
+            targetClient: targetContext.client,
+            targetBucket: targetContext.bucket,
+            targetKey,
+            isMove,
+          });
+
+          totalMoved += 1;
+          totalBytes += bytes;
+        } catch (itemErr: any) {
+          errors.push(`Gagal memindahkan "${key}": ${itemErr.message}`);
+        }
+      }
+    }
+
+    // --- CASE C: FOLDER MOVE ---
+    else if (type === 'folder') {
+      if (!sourceFolder || typeof sourceFolder !== 'string') {
+        return res.status(400).json({ error: 'sourceFolder wajib diisi' });
+      }
+
+      const cleanSourcePrefix = sourceFolder.replace(/^\/+/, '').replace(/\/+$/, '') + '/';
+
+      // Check identical folder in same bucket and endpoint
+      if (
+        sourceContext.endpoint === targetContext.endpoint &&
+        sourceContext.bucket === targetContext.bucket &&
+        cleanSourcePrefix === cleanTargetPrefix
+      ) {
+        return res.status(400).json({
+          error: 'Folder tujuan tidak boleh sama dengan folder sumber pada bucket yang sama.',
+        });
+      }
+
+      let continuationToken: string | undefined = undefined;
+      let isTruncated = true;
+
+      // Scan all objects under cleanSourcePrefix recursively
+      while (isTruncated) {
+        const listRes: ListObjectsV2CommandOutput = await sourceContext.client.send(
+          new ListObjectsV2Command({
+            Bucket: sourceContext.bucket,
+            Prefix: cleanSourcePrefix,
+            MaxKeys: 1000,
+            ContinuationToken: continuationToken,
+          })
+        );
+
+        const items = listRes.Contents || [];
+        for (const item of items) {
+          if (!item.Key) continue;
+
+          // Compute destination key
+          let destKey = '';
+          if (item.Key === cleanSourcePrefix) {
+            // Folder marker itself
+            destKey = cleanTargetPrefix;
+          } else {
+            const relPath = item.Key.substring(cleanSourcePrefix.length);
+            destKey = cleanTargetPrefix ? `${cleanTargetPrefix}${relPath}` : relPath;
+          }
+
+          if (!destKey) continue;
+
+          try {
+            const { bytes } = await transferObject({
+              sourceClient: sourceContext.client,
+              sourceBucket: sourceContext.bucket,
+              sourceKey: item.Key,
+              targetClient: targetContext.client,
+              targetBucket: targetContext.bucket,
+              targetKey: destKey,
+              isMove,
+            });
+
+            totalMoved += 1;
+            totalBytes += bytes;
+          } catch (itemErr: any) {
+            errors.push(`Gagal memindahkan objek "${item.Key}": ${itemErr.message}`);
+          }
+        }
+
+        isTruncated = Boolean(listRes.IsTruncated);
+        continuationToken = listRes.NextContinuationToken;
+      }
+
+      // If empty folder or folder marker still in source, ensure marker is removed
+      if (isMove) {
+        try {
+          await sourceContext.client.send(
+            new DeleteObjectCommand({
+              Bucket: sourceContext.bucket,
+              Key: cleanSourcePrefix,
+            })
+          );
+        } catch {
+          // Ignore
+        }
+      }
+    } else {
+      return res.status(400).json({ error: 'Tipe pemindahan tidak valid (harus file, batch_files, atau folder)' });
+    }
+
+    // Refresh memory cache if source or target belongs to active bucket
+    const active = getActiveProfile();
+    if (sourceContext.bucket === active.bucket || targetContext.bucket === active.bucket) {
+      cachedFolderStats.clear();
+      scanEntireBucketSummary(true).catch(() => {});
+    }
+
+    const actionText = isMove ? 'dipindahkan' : 'disalin';
+    const isSameEndpoint = sourceContext.endpoint === targetContext.endpoint;
+    const isSameBucket = isSameEndpoint && sourceContext.bucket === targetContext.bucket;
+
+    let routeDesc = '';
+    if (isSameBucket) {
+      routeDesc = `dalam bucket "${sourceContext.bucket}"`;
+    } else if (isSameEndpoint) {
+      routeDesc = `dari bucket "${sourceContext.bucket}" ke "${targetContext.bucket}" (satu endpoint)`;
+    } else {
+      routeDesc = `lintas endpoint dari "${sourceContext.bucket}" (${sourceContext.profileName}) ke "${targetContext.bucket}" (${targetContext.profileName})`;
+    }
+
+    res.json({
+      success: totalMoved > 0 || errors.length === 0,
+      message: `Berhasil ${actionText} ${totalMoved} objek ${routeDesc}.`,
+      movedCount: totalMoved,
+      totalBytes,
+      sourceBucket: sourceContext.bucket,
+      targetBucket: targetContext.bucket,
+      sourceEndpoint: sourceContext.endpoint,
+      targetEndpoint: targetContext.endpoint,
+      targetProfileId: targetContext.profileId,
+      targetProfileName: targetContext.profileName,
+      errors: errors.length > 0 ? errors : undefined,
+    });
+  } catch (err: any) {
+    console.error('[CloudVault Move Error]:', err);
+    res.status(500).json({
+      error: 'Gagal memproses pemindahan storage',
       details: err.message,
     });
   }

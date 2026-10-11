@@ -11,8 +11,18 @@ import { SyncLogDrawer } from './components/SyncLogDrawer';
 import { LoginForm } from './components/LoginForm';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
 import { StorageSummaryModal } from './components/StorageSummaryModal';
+import { MoveStorageItemModal } from './components/MoveStorageItemModal';
 import { api } from './services/api';
-import { StorageFile, StorageHealth, SyncLogEntry, AuthUser, StorageUsageSummary, StorageEndpointProfile } from './types';
+import {
+  StorageFile,
+  StorageHealth,
+  SyncLogEntry,
+  AuthUser,
+  StorageUsageSummary,
+  StorageEndpointProfile,
+  MoveItemTarget,
+  MoveItemResponse,
+} from './types';
 
 export default function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -46,6 +56,7 @@ export default function App() {
   const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
   const [previewFile, setPreviewFile] = useState<StorageFile | null>(null);
   const [cryptoFile, setCryptoFile] = useState<StorageFile | null>(null);
+  const [moveTarget, setMoveTarget] = useState<MoveItemTarget | null>(null);
 
   // Sync state
   const [autoSyncActive, setAutoSyncActive] = useState<boolean>(false);
@@ -145,6 +156,37 @@ export default function App() {
     }
   };
 
+  const handleDeleteFolder = async (folderPath: string) => {
+    try {
+      showToast(`Menghapus folder "${folderPath}" dari cloud storage...`, 'info');
+      const res = await api.deleteFolder(folderPath);
+      showToast(res.message, 'success');
+      addLog({
+        id: Math.random().toString(36).slice(2),
+        timestamp: new Date().toISOString(),
+        type: 'delete',
+        fileName: `Folder: ${folderPath}`,
+        status: 'success',
+        message: `Folder ${folderPath} (${res.deletedObjectsCount} berkas) berhasil dihapus`,
+      });
+
+      // Jika sedang berada di dalam folder yang dihapus, arahkan kembali ke folder induk
+      if (currentPrefix === folderPath || currentPrefix.startsWith(folderPath)) {
+        const parts = folderPath.replace(/\/$/, '').split('/');
+        parts.pop();
+        const parent = parts.length > 0 ? parts.join('/') + '/' : '';
+        setCurrentPrefix(parent);
+        await loadFiles(parent, limit, isRecursive);
+      } else {
+        await loadFiles(currentPrefix, limit, isRecursive);
+      }
+      loadStorageSummary(true);
+    } catch (err: any) {
+      showToast(err.message || 'Gagal menghapus folder', 'error');
+      throw err;
+    }
+  };
+
   const handleLoadMore = () => {
     if (nextContinuationToken) {
       loadFiles(currentPrefix, limit, isRecursive, nextContinuationToken);
@@ -209,6 +251,20 @@ export default function App() {
     } finally {
       setIsLoadingFiles(false);
     }
+  };
+
+  const handleMoveItemSuccess = (res: MoveItemResponse) => {
+    showToast(res.message, 'success');
+    addLog({
+      id: Math.random().toString(36).slice(2),
+      timestamp: new Date().toISOString(),
+      type: 'upload',
+      fileName: `${res.movedCount} objek dipindahkan ke [${res.targetBucket}]`,
+      fileSize: res.totalBytes,
+      status: 'success',
+      message: res.message,
+    });
+    handleRefreshAll();
   };
 
   // Auth & Initial Load on Mount Only
@@ -436,6 +492,8 @@ export default function App() {
             loadFiles(currentPrefix, limit, rec);
           }}
           onCreateFolder={handleCreateFolder}
+          onDeleteFolder={handleDeleteFolder}
+          onMoveItem={(target) => setMoveTarget(target)}
           isTruncated={isTruncated}
           onLoadMore={handleLoadMore}
           isLoadingMore={isLoadingMore}
@@ -526,6 +584,26 @@ export default function App() {
         isLoading={isLoadingSummary}
         onRefresh={() => loadStorageSummary(true)}
         onNavigateToFolder={(prefix) => loadFiles(prefix, limit, isRecursive)}
+        onDeleteFolder={handleDeleteFolder}
+        onMoveFolder={(f) =>
+          setMoveTarget({
+            type: 'folder',
+            name: f.name,
+            sourcePath: f.prefix,
+            fileCount: f.fileCount,
+            totalSize: f.totalSizeBytes,
+          })
+        }
+      />
+
+      <MoveStorageItemModal
+        isOpen={Boolean(moveTarget)}
+        onClose={() => setMoveTarget(null)}
+        target={moveTarget}
+        endpoints={endpoints}
+        activeEndpointId={activeEndpointId}
+        currentBucket={summary?.bucket || endpoints.find((e) => e.id === activeEndpointId)?.bucket}
+        onSuccess={handleMoveItemSuccess}
       />
     </div>
   );
