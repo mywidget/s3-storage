@@ -1,0 +1,8 @@
+{
+  "name": "Remix CloudVault Encrypted Object Storage \u0026 Sync",
+  "description": "Aplikasi cloud object storage aman dengan enkripsi otomatis (AES-256-GCM) dan fitur sinkronisasi file cerdas untuk Cloudflare R2 / S3.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
