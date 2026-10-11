@@ -311,3 +311,68 @@ Jika di server VPS / aaPanel Anda **Port 3000 sudah digunakan** oleh aplikasi la
    }
    ```
    Simpan dan klik **Reload Nginx**. Buka kembali domain Anda, website akan langsung terbuka normal dan error 502 / Blank akan terselesaikan!
+
+---
+
+#### Error: `[vite] failed to connect to websocket (Error: WebSocket closed without opened.)`
+
+##### Mengapa Error Ini Muncul?
+- Pesan ini berasal dari script `/@vite/client` bawaan **Vite Development Server**.
+- Script ini bertugas membuka koneksi WebSocket untuk fitur HMR (*Hot Module Replacement* / reload otomatis saat koding di komputer lokal).
+- Jika pesan ini muncul di browser saat membuka domain VPS Anda (`https://s3.thm.my.id`), artinya:
+  1. **Aplikasi di VPS Anda masih berjalan dalam Mode Development** (belum di-build ke mode Production), ATAU
+  2. Perintah `npm run build` belum dijalankan di VPS sehingga folder `dist/` belum ada, menyebabkan server Node.js terpaksa menjalankan Vite Dev Server, ATAU
+  3. Koneksi WebSocket dihalangi oleh **Cloudflare** (fitur WebSockets belum aktif) atau Nginx.
+
+---
+
+##### Solusi Utama (Rekomendasi Terbaik untuk Server / VPS):
+Di server produksi, aplikasi **seharusnya tidak menjalankan Vite Dev Server**, melainkan menyajikan bundle statis yang sudah di-build (`dist/`). Bundle produksi tidak memuat WebSocket HMR sama sekali, sehingga loading jauh lebih cepat dan bebas error!
+
+Jalankan langkah berikut di terminal VPS Anda:
+
+1. **Jalankan Build Proyek:**
+   ```bash
+   npm run build
+   ```
+   *(Tunggu beberapa detik hingga folder `dist/` berhasil dibuat).*
+
+2. **Restart PM2 dengan konfigurasi Production:**
+   ```bash
+   pm2 restart cloudvault --update-env
+   ```
+   *(Atau jika belum aktif: `pm2 start ecosystem.config.cjs`)*
+
+3. **Cek Log PM2:**
+   ```bash
+   pm2 logs cloudvault --lines 20
+   ```
+   Anda akan melihat log:
+   `[CloudVault] Serving static production build from dist/`
+   
+   Sekarang refresh browser Anda dengan `Ctrl + F5` (hard refresh). Error WebSocket akan hilang 100%!
+
+---
+
+##### Solusi Alternatif (Jika Memang Ingin Menjalankan Vite Dev Server di VPS):
+Jika Anda sengaja ingin menjalankan dalam dev mode di domain publik:
+
+1. **Aktifkan WebSockets di Cloudflare:**
+   - Masuk ke [Cloudflare Dashboard](https://dash.cloudflare.com)
+   - Pilih domain Anda (`thm.my.id`)
+   - Buka menu **Network** di sebelah kiri
+   - Cari opsi **WebSockets** dan ubah menjadi **ON** (Enabled).
+
+2. **Pastikan Header WebSocket di Nginx aaPanel sudah terpasang:**
+   ```nginx
+   proxy_http_version 1.1;
+   proxy_set_header Upgrade $http_upgrade;
+   proxy_set_header Connection 'upgrade';
+   ```
+
+3. **Atau Matikan HMR di file `.env`:**
+   Tambahkan baris berikut di `.env`:
+   ```env
+   DISABLE_HMR=true
+   ```
+   Lalu restart PM2: `pm2 restart cloudvault --update-env`.

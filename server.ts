@@ -1555,6 +1555,7 @@ async function setupVite() {
       server: {
         middlewareMode: true,
         allowedHosts: true,
+        hmr: isProd || process.env.DISABLE_HMR === 'true' ? false : undefined,
       },
       appType: 'spa',
     });
