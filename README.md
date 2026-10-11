@@ -215,3 +215,99 @@ npm install
 npm run build
 pm2 restart cloudvault
 ```
+
+---
+
+### ⚠️ Solusi Masalah Umum (Troubleshooting)
+
+#### Error: `Loading module from “.../src/main.tsx” was blocked because of a disallowed MIME type (“application/octet-stream”)`
+
+Penyebab error ini terjadi:
+1. **Frontend Belum Di-build**: File `/src/main.tsx` adalah file mentah TypeScript development yang ada di root `index.html`. Pada production, browser **harus** memuat file JavaScript terkompilasi dari folder `dist/` (contoh: `/assets/index-xxxx.js`), bukan `/src/main.tsx`.
+   - **Solusi:** Jalankan `npm run build` di server VPS Anda:
+     ```bash
+     npm run build
+     pm2 restart cloudvault
+     ```
+2. **Konfigurasi Nginx Salah Mengarahkan `root`**:
+   Jika di konfigurasi Nginx Anda terdapat baris seperti:
+   ```nginx
+   # ❌ SALAH (Jangan arahkan ke root folder proyek):
+   root /var/www/cloudvault;
+   try_files $uri $uri/ /index.html;
+   ```
+   Nginx akan mengambil file mentah `/src/main.tsx` langsung dari disk dan menyajikannya sebagai `application/octet-stream` (karena Nginx tidak mengenal ekstensi `.tsx`).
+   - **Solusi:** 
+     Hapus baris `root` dan `try_files` tersebut, dan biarkan Nginx mem-*proxy pass* semua request ke Express di port 3000:
+     ```nginx
+     # ✅ BENAR:
+     location / {
+         proxy_pass http://127.0.0.1:3000;
+         proxy_http_version 1.1;
+         proxy_set_header Upgrade $http_upgrade;
+         proxy_set_header Connection 'upgrade';
+         proxy_set_header Host $host;
+         proxy_set_header X-Real-IP $remote_addr;
+         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+         proxy_set_header X-Forwarded-Proto $scheme;
+     }
+     ```
+     Lalu jalankan `sudo nginx -t && sudo systemctl reload nginx`.
+
+
+---
+
+#### Error: `502 Bad Gateway` atau Halaman Blank (Jika Port 3000 Sudah Digunakan / Memakai Port 1008)
+
+Jika di server VPS / aaPanel Anda **Port 3000 sudah digunakan** oleh aplikasi lain, Anda bisa menggunakan port lain (misalnya **`1008`**).
+
+##### Mengapa muncul `502 Bad Gateway`?
+- Di konfigurasi Nginx aaPanel, Anda mengatur `proxy_pass http://127.0.0.1:1008;`.
+- Namun proses Node.js CloudVault di PM2 **belum mendengarkan (listen) di port 1008** (karena sebelumnya masih diset ke port 3000, atau PM2 crash karena port 3000 bentrok dengan aplikasi lain).
+- Nginx mencoba menghubungi port 1008, namun tidak ada proses yang merespons, sehingga Nginx / Cloudflare melempar error **502 Bad Gateway**.
+
+##### Mengapa saat `proxy_pass` dihapus halamannya menjadi Blank (Putih Kosong)?
+- Ketika blok `proxy_pass` dihapus, Nginx aaPanel hanya menyajikan folder statis kosong tanpa terhubung ke backend Express CloudVault. Seluruh API backend terputus, sehingga browser menampilkan halaman kosong.
+
+##### Solusi: Cara Mengubah Port ke 1008 dengan Benar
+
+1. **Ubah `PORT` di file `.env` di folder proyek Anda:**
+   ```bash
+   nano .env
+   ```
+   Tambahkan atau ubah baris:
+   ```env
+   PORT=1008
+   ```
+
+2. **Jalankan / Restart PM2 agar membaca port 1008:**
+   ```bash
+   pm2 restart cloudvault --update-env
+   ```
+   *(Atau jika baru pertama kali: `pm2 start ecosystem.config.cjs`)*
+
+3. **Uji apakah Node.js sudah aktif di port 1008:**
+   ```bash
+   curl http://127.0.0.1:1008/api/health
+   ```
+   Jika muncul respon JSON (misal `{"status":"connected"}` atau data profil), berarti Node.js **sudah berhasil aktif di port 1008**.
+
+4. **Gunakan kembali konfigurasi Reverse Proxy di aaPanel Nginx:**
+   ```nginx
+   location / {
+       proxy_pass http://127.0.0.1:1008;
+       proxy_http_version 1.1;
+       proxy_set_header Upgrade $http_upgrade;
+       proxy_set_header Connection 'upgrade';
+       proxy_set_header Host $host;
+       proxy_set_header X-Real-IP $remote_addr;
+       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       proxy_set_header X-Forwarded-Proto $scheme;
+       proxy_cache_bypass $http_upgrade;
+
+       client_max_body_size 500M;
+       proxy_read_timeout 600s;
+       proxy_send_timeout 600s;
+   }
+   ```
+   Simpan dan klik **Reload Nginx**. Buka kembali domain Anda, website akan langsung terbuka normal dan error 502 / Blank akan terselesaikan!

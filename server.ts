@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import multer from 'multer';
 import crypto from 'crypto';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import {
@@ -1533,8 +1534,22 @@ app.post('/api/sync/diff', async (req: Request, res: Response) => {
 // Mount Vite or static server
 async function setupVite() {
   const isProd = process.env.NODE_ENV === 'production';
+  const distHtmlPath = path.resolve(__dirname, 'dist', 'index.html');
+  const hasDist = fs.existsSync(distHtmlPath);
 
-  if (!isProd) {
+  if (isProd && hasDist) {
+    console.log('[CloudVault] Serving static production build from dist/');
+    app.use(express.static(path.resolve(__dirname, 'dist')));
+    app.get('*', (_req: Request, res: Response) => {
+      res.sendFile(distHtmlPath);
+    });
+  } else {
+    if (isProd && !hasDist) {
+      console.warn('⚠️ [CloudVault] PERINGATAN: NODE_ENV=production tetapi folder dist/index.html belum ditemukan!');
+      console.warn('⚠️ [CloudVault] Harap jalankan "npm run build" di server Anda.');
+      console.warn('⚠️ [CloudVault] Mengalihkan sementara ke Vite development server...');
+    }
+
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: {
@@ -1544,11 +1559,6 @@ async function setupVite() {
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
-    app.get('*', (_req: Request, res: Response) => {
-      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
-    });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
